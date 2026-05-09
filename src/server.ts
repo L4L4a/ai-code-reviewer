@@ -28,7 +28,7 @@ app.post('/webhook', async (req, res) => {
 
   const payload: WebhookPayload = JSON.parse(req.body.toString())
 
-  if (payload.action !== 'opened' && payload.action !== 'synchronize') {
+  if (payload.action !== 'opened' && payload.action !== 'synchronize' && payload.action !== 'reopened') {
     return res.status(200).json({ message: 'ignored' })
   }
 
