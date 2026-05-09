@@ -26,7 +26,7 @@ export async function reviewDiff(diffs: FileDiff[]): Promise<ReviewResult> {
   const formattedDiff = formatDiffForReview(diffs)
 
   const completion = await client.chat.completions.create({
-    model: 'llama3-70b-8192',
+    model: 'llama-3.3-70b-versatile',
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: `Please review these code changes:\n\n${formattedDiff}` }
