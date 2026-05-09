@@ -4,7 +4,6 @@ import dotenv from 'dotenv'
 import { getPullRequestDiff, postReview } from './github'
 import { parseDiff } from './parser'
 import { reviewDiff } from './reviewer'
-import { enqueue, processQueue, QueueJob } from './queue'
 import { WebhookPayload } from './types'
 
 dotenv.config()
@@ -23,54 +22,54 @@ app.post('/webhook', async (req, res) => {
   const isValid = verifySignature(req.body, signature)
 
   if (!isValid) {
+    console.log('invalid signature')
     return res.status(401).json({ error: 'invalid signature' })
   }
 
   const payload: WebhookPayload = JSON.parse(req.body.toString())
 
-  if (payload.action !== 'opened' && payload.action !== 'synchronize' && payload.action !== 'reopened') {
+  if (!['opened', 'synchronize', 'reopened'].includes(payload.action)) {
     return res.status(200).json({ message: 'ignored' })
   }
 
-  res.status(200).json({ message: 'review queued' })
+  // respond immediately so GitHub doesn't timeout
+  res.status(200).json({ message: 'review started' })
+
+  // process asynchronously after responding
+  const { owner: { login: owner }, name: repo } = payload.repository
+  const { number, head } = payload.pull_request
+
+  console.log(`starting review for PR #${number} in ${owner}/${repo}`)
 
   try {
-    const { owner: { login: owner }, name: repo } = payload.repository
-    const { number, head } = payload.pull_request
+    const rawDiff = await getPullRequestDiff(owner, repo, number)
+    console.log('diff fetched')
 
-    await enqueue({
-      owner,
-      repo,
-      pullNumber: number,
-      commitSha: head.sha
-    })
+    const parsedDiff = parseDiff(rawDiff)
+    console.log(`parsed ${parsedDiff.length} files`)
+
+    const review = await reviewDiff(parsedDiff)
+    console.log('review generated')
+
+    await postReview(owner, repo, number, head.sha, review)
+    console.log(`review posted for PR #${number}`)
   } catch (error) {
-    console.error('failed to queue job:', error)
+    console.error('review failed:', error)
   }
 })
 
 function verifySignature(body: Buffer, signature: string): boolean {
   if (!signature) return false
-
   const secret = process.env.GITHUB_WEBHOOK_SECRET || ''
   const expected = 'sha256=' + crypto
     .createHmac('sha256', secret)
     .update(body)
     .digest('hex')
-
   return crypto.timingSafeEqual(
     Buffer.from(signature),
     Buffer.from(expected)
   )
 }
-
-processQueue(async (job: QueueJob) => {
-  const rawDiff = await getPullRequestDiff(job.owner, job.repo, job.pullNumber)
-  const parsedDiff = parseDiff(rawDiff)
-  const review = await reviewDiff(parsedDiff)
-  await postReview(job.owner, job.repo, job.pullNumber, job.commitSha, review)
-  console.log(`review posted for PR #${job.pullNumber}`)
-})
 
 app.listen(PORT, () => {
   console.log(`server running on port ${PORT}`)
