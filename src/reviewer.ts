@@ -1,14 +1,12 @@
-import Anthropic from '@anthropic-ai/sdk'
+import Groq from 'groq-sdk'
 import { ReviewResult } from './types'
 import { FileDiff, formatDiffForReview } from './parser'
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY
+const client = new Groq({
+  apiKey: process.env.GROQ_API_KEY
 })
 
-// the system prompt tells Claude exactly what role it plays
-// and what format to respond in
-const SYSTEM_PROMPT = `You are an expert code reviewer. 
+const SYSTEM_PROMPT = `You are an expert code reviewer.
 When given a code diff, analyze it and respond with ONLY a JSON object in this exact format:
 {
   "summary": "one paragraph describing the overall quality of the changes",
@@ -25,35 +23,22 @@ When given a code diff, analyze it and respond with ONLY a JSON object in this e
 Do not include any text outside the JSON object. No markdown, no explanation, just the JSON.`
 
 export async function reviewDiff(diffs: FileDiff[]): Promise<ReviewResult> {
-  // format the diff into something readable for Claude
   const formattedDiff = formatDiffForReview(diffs)
 
-  const message = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1024,
-    system: SYSTEM_PROMPT,
+  const completion = await client.chat.completions.create({
+    model: 'llama3-70b-8192',
     messages: [
-      {
-        role: 'user',
-        content: `Please review these code changes:\n\n${formattedDiff}`
-      }
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: `Please review these code changes:\n\n${formattedDiff}` }
     ]
   })
 
-  // extract the text from Claude's response
-  const responseText = message.content
-    .filter(block => block.type === 'text')
-    .map(block => block.text)
-    .join('')
-
-  // parse the JSON response into our ReviewResult type
+  const responseText = completion.choices[0]?.message?.content || ''
   return parseReviewResponse(responseText)
 }
 
 function parseReviewResponse(responseText: string): ReviewResult {
   try {
-    // sometimes Claude wraps JSON in markdown code blocks
-    // strip those out if present
     const cleaned = responseText
       .replace(/```json\n?/g, '')
       .replace(/```\n?/g, '')
@@ -61,15 +46,12 @@ function parseReviewResponse(responseText: string): ReviewResult {
 
     const parsed = JSON.parse(cleaned)
 
-    // validate the response has the fields we need
     return {
       summary: parsed.summary || 'No summary provided',
       score: typeof parsed.score === 'number' ? parsed.score : 5,
       comments: Array.isArray(parsed.comments) ? parsed.comments : []
     }
   } catch {
-    // if Claude returns something we can't parse
-    // return a fallback instead of crashing
     return {
       summary: responseText,
       score: 5,
